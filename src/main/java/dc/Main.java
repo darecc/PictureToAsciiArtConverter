@@ -14,18 +14,18 @@ public class Main {
     public static void main(String[] args) throws IOException {
         Scanner sc = new Scanner(System.in);
 
-        System.out.print("Podaj nazwę pliku PNG (np. Darek.png): ");
+        System.out.print("Get file name PNG (np. Darek.png): ");
         String inputFile = sc.nextLine().trim();
         inputFile = inputFile + ".png";
         String outputFile = inputFile + ".out.png";
 
-        System.out.print("Podaj szerokość (np. 240–680, Enter = 360): ");
+        System.out.print("Get columns (eg. 240–680, Enter = 360): ");
         int cols = getIntInput(sc, 360, 240, 800);
 
-        System.out.print("Gamma korekcja (0.6–1.2, Enter = 0.8): ");
+        System.out.print("Gamma correction (0.6–1.2, Enter = 0.8): ");
         double gamma = getDoubleInput(sc, 0.8, 0.5, 1.8);
 
-        System.out.print("Tryb negatywu (Y/N): ");
+        System.out.print("Negative (Y/N): ");
         boolean negative = sc.nextLine().trim().equalsIgnoreCase("Y");
 
         String fontName = "Courier New";
@@ -36,10 +36,11 @@ public class Main {
         String[] asciiData = imageToAscii(inputImage, cols, DEFAULT_CHARS, gamma, negative);
         String[] asciiData2 = imageToAsciiEdges(inputImage, cols);
         BufferedImage outputImage = renderAsciiToImage(asciiData, fontName, fontSize, negative);
-        BufferedImage outputImage2 = renderAsciiToImage(asciiData, fontName, fontSize, negative);
+        BufferedImage outputImage2 = renderAsciiToImage(asciiData2, fontName, fontSize, negative);
         ImageIO.write(outputImage, "png", new File(outputFile));
+        System.out.println("✅ Ready! Written as " + outputFile);
         ImageIO.write(outputImage2, "png", new File(outputFile + ".png"));
-        System.out.println("✅ Gotowe! Zapisano jako " + outputFile);
+        System.out.println("✅ Ready! Written as linear" + outputFile + ".png");
     }
 
     private static String[] imageToAscii(BufferedImage image, int cols, String chars, double gamma, boolean negative) {
@@ -135,14 +136,18 @@ public class Main {
         }
     }
 
-    /** Tworzy ASCII-art oparty na krawędziach obrazu (linie / \ - | .) */
+    /** Tworzy ASCII-art oparty na krawędziach obrazu (linie / \ - | .)
+     *  Poprawiona wersja: wypełnia wszystkie wiersze i ma dokładnie `cols` znaków na wiersz.
+     */
     private static String[] imageToAsciiEdges(BufferedImage image, int cols) {
         int width = image.getWidth();
         int height = image.getHeight();
         double aspectRatio = 0.5;
         int rows = (int) (height * cols / (double) width * aspectRatio);
+        if (rows < 3) rows = 3;
+        if (cols < 3) cols = 3;
 
-        // przeskaluj obraz do mniejszej rozdzielczości dla ASCII
+        // przeskaluj obraz do mniejszej rozdzielczości dla ASCII (GRAY)
         BufferedImage scaled = new BufferedImage(cols, rows, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D g2d = scaled.createGraphics();
         g2d.drawImage(image, 0, 0, cols, rows, null);
@@ -152,44 +157,54 @@ public class Main {
         int[][] gray = new int[rows][cols];
         for (int y = 0; y < rows; y++) {
             for (int x = 0; x < cols; x++) {
-                int rgb = scaled.getRGB(x, y);
-                int r = (rgb >> 16) & 0xFF;
-                int g = (rgb >> 8) & 0xFF;
-                int b = rgb & 0xFF;
-                gray[y][x] = (int)(0.299 * r + 0.587 * g + 0.114 * b);
+                int rgb = scaled.getRGB(x, y) & 0xFF; // grayscale => lower byte
+                gray[y][x] = rgb;
             }
         }
 
         String[] ascii = new String[rows];
-        for (int y = 1; y < rows - 1; y++) {
-            StringBuilder sb = new StringBuilder();
-            for (int x = 1; x < cols - 1; x++) {
-                int gx =
-                        -1 * gray[y - 1][x - 1] + 1 * gray[y - 1][x + 1]
-                                + -2 * gray[y][x - 1]     + 2 * gray[y][x + 1]
-                                + -1 * gray[y + 1][x - 1] + 1 * gray[y + 1][x + 1];
-                int gy =
-                        -1 * gray[y - 1][x - 1] + -2 * gray[y - 1][x] + -1 * gray[y - 1][x + 1]
-                                +  1 * gray[y + 1][x - 1] +  2 * gray[y + 1][x] +  1 * gray[y + 1][x + 1];
 
-                double mag = Math.sqrt(gx * gx + gy * gy);
-                double angle = Math.atan2(gy, gx); // w radianach
+        // próg magnitudy krawędzi - możesz go wyeksponować jako parametr
+        final double EDGE_THRESHOLD = 40.0;
+
+        for (int y = 0; y < rows; y++) {
+            StringBuilder sb = new StringBuilder(cols);
+            for (int x = 0; x < cols; x++) {
+                // obsługa brzegów: użyj klamping (powiel skrajny piksel)
+                int xm1 = Math.max(0, x - 1), xp1 = Math.min(cols - 1, x + 1);
+                int ym1 = Math.max(0, y - 1), yp1 = Math.min(rows - 1, y + 1);
+
+                int gx =
+                        -1 * gray[ym1][xm1] + 1 * gray[ym1][xp1]
+                                + -2 * gray[y][xm1]     + 2 * gray[y][xp1]
+                                + -1 * gray[yp1][xm1] + 1 * gray[yp1][xp1];
+
+                int gy =
+                        -1 * gray[ym1][xm1] + -2 * gray[ym1][x] + -1 * gray[ym1][xp1]
+                                +  1 * gray[yp1][xm1] +  2 * gray[yp1][x] +  1 * gray[yp1][xp1];
+
+                double mag = Math.sqrt((double)gx * gx + (double)gy * gy);
 
                 char c;
-                if (mag < 40) c = ' ';
-                else {
-                    double deg = Math.toDegrees(angle);
-                    if (deg < 0) deg += 180;
-                    if (deg < 22.5 || deg >= 157.5) c = '-';
-                    else if (deg < 67.5) c = '/';
-                    else if (deg < 112.5) c = '|';
+                if (mag < EDGE_THRESHOLD) {
+                    c = ' '; // brak wyraźnej krawędzi
+                } else {
+                    double angle = Math.toDegrees(Math.atan2(gy, gx));
+                    if (angle < 0) angle += 180; // rozmiar kąta 0..180 wystarczy
+                    // rozdzielamy kąty w 4 sektory: -, /, |, \
+                    if (angle < 22.5 || angle >= 157.5) c = '-';
+                    else if (angle < 67.5) c = '/';
+                    else if (angle < 112.5) c = '|';
                     else c = '\\';
                 }
-
                 sb.append(c);
             }
+            // zapewniamy że każda linia ma dokładnie cols znaków
+            while (sb.length() < cols) sb.append(' ');
+            if (sb.length() > cols) sb.setLength(cols);
             ascii[y] = sb.toString();
         }
+
         return ascii;
     }
 }
